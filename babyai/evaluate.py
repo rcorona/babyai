@@ -1,7 +1,7 @@
 import numpy as np
 import gym
 from gym_minigrid.wrappers import RGBImgPartialObsWrapper
-
+from tqdm import tqdm
 
 # Returns the performance of the agent on the environment for a particular number of episodes.
 def evaluate(agent, env, episodes, model_agent=True, offsets=None):
@@ -101,9 +101,13 @@ def batch_evaluate(agent, env_name, seed, episodes, return_obss_actions=False, p
         "seed_per_episode": []
     }
 
-    for i in range((episodes + num_envs - 1) // num_envs):
+    for i in tqdm(range((episodes + num_envs - 1) // num_envs)):
         seeds = range(seed + i * num_envs, seed + (i + 1) * num_envs)
         env.seed(seeds)
+
+        # Reset agent. 
+        if hasattr(agent, 'reset'):
+            agent.reset()
 
         many_obs = env.reset()
 
