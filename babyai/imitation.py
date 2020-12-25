@@ -86,6 +86,7 @@ class ImitationLearning(object):
             self.train_demos = []
             for demos, episodes in zip(args.multi_demos, args.multi_episodes):
                 demos_path = utils.get_demos_path(demos, None, None, valid=False)
+
                 logger.info('loading {} of {} demos'.format(episodes, demos))
                 train_demos = utils.load_demos(demos_path)
                 logger.info('loaded demos')
@@ -392,7 +393,7 @@ class ImitationLearning(object):
 
             indices = index_sampler.get_epoch_indices(status['i'])
             log = self.run_epoch_recurrence(train_demos, is_training=True, indices=indices)
-            
+
             # Learning rate scheduler
             self.scheduler.step()
 

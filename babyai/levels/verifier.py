@@ -1,6 +1,8 @@
 import os
+import sys
 import numpy as np
 from enum import Enum
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir, 'gym-minigrid')))
 from gym_minigrid.minigrid import COLOR_NAMES, DIR_TO_VEC
 
 # Object types we are allowed to describe in language

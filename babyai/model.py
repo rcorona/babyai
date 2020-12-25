@@ -42,7 +42,7 @@ class FiLM(nn.Module):
         weight = self.weight(y).unsqueeze(2).unsqueeze(3)
         bias = self.bias(y).unsqueeze(2).unsqueeze(3)
         out = x * weight + bias
-        return F.relu(self.bn2(out))
+        return {'masked': F.relu(self.bn2(out)), 'unmasked': x}
 
 
 class ImageBOWEmbedding(nn.Module):
@@ -57,6 +57,22 @@ class ImageBOWEmbedding(nn.Module):
        offsets = torch.Tensor([0, self.max_value, 2 * self.max_value]).to(inputs.device)
        inputs = (inputs + offsets[None, :, None, None]).long()
        return self.embedding(inputs).sum(1).permute(0, 3, 1, 2)
+
+class LanguageEmbedding(nn.Module):
+    def __init__(self, input_dim, output_dim, num_layers=2):
+        self.lstm = nn.LSTM(input_dim, output_dim, num_layers=num_layers, bidirectional=False, batch_first=True)
+        self.num_layers = num_layers
+        self.output_dim = output_dim
+        self.input_dim = input_dim
+
+    def forward(self, instr, h, c):
+        batch_size = instr.shape[0]
+        if h is None or c is None:
+            h = torch.zeros(self.num_layers, batch_size, self.output_dim).to(instr.device)
+            c = torch.zeros(self.num_layers, batch_size, self.output_dim).to(instr.device)
+        _, (h, c) = self.lstm(instr, (h, c))
+        out = h[-1].squeeze()
+        return out, (h, c)
 
 
 class ACModel(nn.Module, babyai.rl.RecurrentACModel):
@@ -113,7 +129,9 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         if self.use_instr:
             if self.lang_model in ['gru', 'bigru', 'attgru']:
                 self.word_embedding = nn.Embedding(obs_space["instr"], self.instr_dim)
-                if self.lang_model in ['gru', 'bigru', 'attgru']:
+                if self.cpv:
+                    self.instr_rnn = LanguageEmbedding(self.instr_dim, self.instr_dim//2)
+                elif self.lang_model in ['gru', 'bigru', 'attgru']:
                     gru_dim = self.instr_dim
                     if self.lang_model in ['bigru', 'attgru']:
                         gru_dim //= 2
@@ -148,15 +166,19 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             self.embedding_size = self.semi_memory_size
 
         # Define actor's model
+        if self.cpv:
+            input_dim = self.embedding_size * 2
+        else:
+            input_dim = self.embedding_size
         self.actor = nn.Sequential(
-            nn.Linear(self.embedding_size, 64),
+            nn.Linear(input_dim, 64),
             nn.Tanh(),
             nn.Linear(64, action_space.n)
         )
 
         # Define critic's model
         self.critic = nn.Sequential(
-            nn.Linear(self.embedding_size, 64),
+            nn.Linear(input_dim, 64),
             nn.Tanh(),
             nn.Linear(64, 1)
         )
@@ -243,8 +265,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             x /= 256.0
         x = self.image_conv(x)
         if self.use_instr:
-            for controller in self.controllers:
-                out = controller(x, instr_embedding)
+            for controller in self.controllers: # These are the FiLM Modules
+                out = controller(x, instr_embedding)['masked']
                 if self.res:
                     out += x
                 x = out
@@ -254,10 +276,25 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         if self.use_memory:
             hidden = (memory[:, :self.semi_memory_size], memory[:, self.semi_memory_size:])
             hidden = self.memory_rnn(x, hidden)
-            embedding = hidden[0]
+            img_embedding = hidden[0]
             memory = torch.cat(hidden, dim=1)
         else:
-            embedding = x
+            img_embedding = x
+
+        if self.cpv:
+            print("Running CPV")
+            for controller in self.controllers: # These are the FiLM Modules
+                out = controller(x, instr_embedding)['unmasked']
+                if self.res:
+                    out += x
+                x = out
+            x = F.relu(self.film_pool(x))
+            x = x.reshape(x.shape[0], -1)
+            obs_embedding = x
+            embedding = instr_embedding - img_embedding
+            embedding = torch.cat([plan, obs_embedding], dim=1)
+        else:
+            embedding = img_embedding
 
         if hasattr(self, 'aux_info') and self.aux_info:
             extra_predictions = {info: self.extra_heads[info](embedding) for info in self.extra_heads}
@@ -274,6 +311,11 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
     def _get_instr_embedding(self, instr):
         lengths = (instr != 0).sum(1).long()
+
+        if self.cpv:
+            out, _ = self.instr_rnn(self.word_embedding(instr))
+            return out
+
         if self.lang_model == 'gru':
             out, _ = self.instr_rnn(self.word_embedding(instr))
             hidden = out[range(len(lengths)), lengths-1, :]

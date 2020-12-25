@@ -1,8 +1,9 @@
 import os
+import blosc
 import pickle
 
 from .. import utils
-import blosc
+
 
 
 def get_demos_path(demos=None, env=None, origin=None, valid=False):
@@ -14,6 +15,7 @@ def get_demos_path(demos=None, env=None, origin=None, valid=False):
 
 
 def load_demos(path, raise_not_found=True):
+    path = "." + path
     try:
         return pickle.load(open(path, "rb"))
     except FileNotFoundError:

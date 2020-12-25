@@ -14,6 +14,9 @@ import numpy as np
 import sys
 import logging
 import torch
+
+sys.path.insert(0, os.environ['BABYAI_ROOT'])
+sys.path.insert(0, os.path.join(os.environ['BABYAI_ROOT'], 'babyai'))
 from babyai.arguments import ArgumentParser
 import babyai.utils as utils
 from babyai.imitation import ImitationLearning
@@ -36,11 +39,14 @@ parser.add_argument("--multi-episodes", type=int, nargs='*', default=None,
                     help="number of episodes of demos to use from each file (REQUIRED when multi-env is specified)")
 parser.add_argument("--save-interval", type=int, default=1,
                     help="number of epochs between two saves (default: 1, 0 means no saving)")
+parser.add_argument("--cpv", action="store_true",
+                    help="run with cpv formulation")
 
 
 def main(args):
     # Verify the arguments when we train on multiple environments
     # No need to check for the length of len(args.multi_env) in case, for some reason, we need to validate on other envs
+
     if args.multi_env is not None:
         assert len(args.multi_demos) == len(args.multi_episodes)
 

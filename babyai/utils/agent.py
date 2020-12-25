@@ -5,13 +5,12 @@ from .. import utils
 from babyai.bot import Bot
 from babyai.model import ACModel
 from random import Random
-import pdb
 from argparse import Namespace
 import pickle
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 import torch.nn.functional as F
-import revtok
+# import revtok
 
 class Agent(ABC):
     """An abstraction of the behavior of an agent. The agent is able:
@@ -45,12 +44,12 @@ class CPVPolicy(nn.Module):
 
         self.batch_size = 256
 
-        # Unpack model dict. 
+        # Unpack model dict.
         model_dict = torch.load(model_path)
         self.args = model_dict['args']
         self.vocab = model_dict['vocab']
         self.device = torch.device('cuda') if self.args.gpu else torch.device('cpu')
-    
+
         print(self.vocab)
         print([self.vocab.index2word(i) for i in range(35)])
 
@@ -71,19 +70,19 @@ class CPVPolicy(nn.Module):
 
         self.im_linear_2 =  nn.Linear(self.args.demb, self.num_actions)
 
-        # Load pre-trained model. 
+        # Load pre-trained model.
         self.load_state_dict(model_dict['model'])
         self.to(self.device)
 
         self.reset()
 
-    def reset(self): 
-        # Hidden states for LSTMs. 
+    def reset(self):
+        # Hidden states for LSTMs.
         self.context_h = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H
-        self.context_c = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H 
+        self.context_c = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H
 
         self.obs_h = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H
-        self.obs_c = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H 
+        self.obs_c = torch.zeros(2, self.batch_size, self.args.dhid).type(torch.float).to(self.device) # -> 2 x B x H
 
     def language_encoder(self, batch, batch_size, h_0=None, c_0=None):
         '''
@@ -105,12 +104,12 @@ class CPVPolicy(nn.Module):
         '''
         B = imgs.shape[0]
 
-        # Put on device. 
+        # Put on device.
         imgs = imgs.to(self.device)
         high = high.to(self.device)
         high_lens = high_lens.to(self.device)
 
-        # Embed image observation. 
+        # Embed image observation.
         imgs = self.linear(imgs)
         context, (self.context_h, self.context_c) = self.img_enc(imgs, (self.context_h, self.context_c))
         obs, (self.obs_h, self.obs_c) = self.obs_enc(imgs, (self.obs_h, self.obs_c))
@@ -118,31 +117,31 @@ class CPVPolicy(nn.Module):
         context = context.squeeze()
         obs = obs.squeeze()
 
-        # Embed language. 
+        # Embed language.
         high = self.embed(high) # -> B x M x D
         high = pack_padded_sequence(high, high_lens, batch_first=True, enforce_sorted=False)
         high, _, _ = self.language_encoder(high, B) # -> B x H
 
-        ## Pass through policy. 
+        ## Pass through policy.
 
         if hasattr(self.args, 'baseline') and self.args.baseline:
             state = torch.cat([high, context, obs], dim=1)
-        else: 
+        else:
             ## plan -> high - context
             plan = high - context
-            
+
             ## state -> concat plan and current
             state = torch.cat([plan, obs], dim=1)
-            
+
         ## put state through ff
         state = self.im_linear_1(state)
         state = F.relu(state)
         state = self.im_linear_2(state)
 
-        # Distribution over actions. 
+        # Distribution over actions.
         dist = F.softmax(state, dim=1)
         action = torch.argmax(dist, dim=1)
-        
+
         return {'dist': dist, 'action': action}
 
 class CPVAgent(Agent):
@@ -151,19 +150,19 @@ class CPVAgent(Agent):
         self.model = CPVPolicy(model_path)
         self.model.eval()
 
-        # For vectorizing binary features. 
+        # For vectorizing binary features.
         self.object_default = np.array([np.eye(11) for _ in range(49)])
         self.color_default = np.array([np.eye(6) for _ in range(49)])
         self.state_default = np.array([np.eye(3) for _ in range(49)])
 
         self.final_shape = 7 * 7 * (11 + 6 + 3)
 
-    def reset(self): 
+    def reset(self):
         self.model.reset()
 
     def act_batch(self, many_obs):
-        
-        # Unpack and preprocess image observation. 
+
+        # Unpack and preprocess image observation.
         imgs = [np.reshape(obs['image'], (49, -1)) for obs in many_obs]
 
         low_level_object = [torch.tensor(self.object_default[list(range(49)), img[:, 0], :], dtype=torch.float) for img in imgs]
@@ -174,10 +173,10 @@ class CPVAgent(Agent):
         imgs = torch.stack(imgs).unsqueeze(1)
 
         # Preprocess Language
-        highs = [torch.tensor([self.model.vocab.word2index(word.strip()) for word in revtok.tokenize(o['mission'])]) for o in many_obs]
+        # highs = [torch.tensor([self.model.vocab.word2index(word.strip()) for word in revtok.tokenize(o['mission'])]) for o in many_obs]
         high_lens = torch.tensor([len(high) for high in highs])
         highs = pad_sequence(highs, batch_first=True)
-    
+
         with torch.no_grad():
             return self.model.act(imgs, highs, high_lens)
 
@@ -316,7 +315,7 @@ def load_agent(env, model_name, demos_name=None, demos_origin=None, argmax=True,
     if model_name == 'BOT':
         return BotAgent(env)
 
-    elif model_name == 'cpv': 
+    elif model_name == 'cpv':
         return CPVAgent(model_path)
 
     elif model_name is not None:
