@@ -146,7 +146,7 @@ class ImitationLearning(object):
                 self.acmodel = ACModel(self.obss_preprocessor.obs_space, action_space,
                                        args.image_dim, args.memory_dim, args.instr_dim,
                                        not self.args.no_instr, self.args.instr_arch,
-                                       not self.args.no_mem, self.args.arch)
+                                       not self.args.no_mem, self.args.arch, cpv=self.args.cpv)
         self.obss_preprocessor.vocab.save()
         utils.save_model(self.acmodel, args.model)
 

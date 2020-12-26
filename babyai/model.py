@@ -30,18 +30,20 @@ class FiLM(nn.Module):
             in_channels=imm_channels, out_channels=out_features,
             kernel_size=(3, 3), padding=1)
         self.bn2 = nn.BatchNorm2d(out_features)
-
         self.weight = nn.Linear(in_features, out_features)
         self.bias = nn.Linear(in_features, out_features)
 
         self.apply(initialize_parameters)
 
     def forward(self, x, y):
+
         x = F.relu(self.bn1(self.conv1(x)))
         x = self.conv2(x)
+
         weight = self.weight(y).unsqueeze(2).unsqueeze(3)
         bias = self.bias(y).unsqueeze(2).unsqueeze(3)
         out = x * weight + bias
+
         return {'masked': F.relu(self.bn2(out)), 'unmasked': x}
 
 
@@ -60,12 +62,13 @@ class ImageBOWEmbedding(nn.Module):
 
 class LanguageEmbedding(nn.Module):
     def __init__(self, input_dim, output_dim, num_layers=2):
+        super().__init__()
         self.lstm = nn.LSTM(input_dim, output_dim, num_layers=num_layers, bidirectional=False, batch_first=True)
         self.num_layers = num_layers
         self.output_dim = output_dim
         self.input_dim = input_dim
 
-    def forward(self, instr, h, c):
+    def forward(self, instr, h=None, c=None):
         batch_size = instr.shape[0]
         if h is None or c is None:
             h = torch.zeros(self.num_layers, batch_size, self.output_dim).to(instr.device)
@@ -79,7 +82,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def __init__(self, obs_space, action_space,
                  image_dim=128, memory_dim=128, instr_dim=128,
                  use_instr=False, lang_model="gru", use_memory=False,
-                 arch="bow_endpool_res", aux_info=None):
+                 arch="bow_endpool_res", aux_info=None, cpv=False):
         super().__init__()
 
         endpool = 'endpool' in arch
@@ -100,6 +103,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         self.instr_dim = instr_dim
 
         self.obs_space = obs_space
+        self.cpv = cpv
+
 
         for part in self.arch.split('_'):
             if part not in ['original', 'bow', 'pixels', 'endpool', 'res']:
@@ -127,11 +132,13 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         # Define instruction embedding
         if self.use_instr:
-            if self.lang_model in ['gru', 'bigru', 'attgru']:
+            if self.cpv:
                 self.word_embedding = nn.Embedding(obs_space["instr"], self.instr_dim)
-                if self.cpv:
-                    self.instr_rnn = LanguageEmbedding(self.instr_dim, self.instr_dim//2)
-                elif self.lang_model in ['gru', 'bigru', 'attgru']:
+                self.instr_rnn = LanguageEmbedding(self.instr_dim, self.instr_dim)
+                self.final_instr_dim = self.instr_dim
+            elif self.lang_model in ['gru', 'bigru', 'attgru']:
+                self.word_embedding = nn.Embedding(obs_space["instr"], self.instr_dim)
+                if self.lang_model in ['gru', 'bigru', 'attgru']:
                     gru_dim = self.instr_dim
                     if self.lang_model in ['bigru', 'attgru']:
                         gru_dim //= 2
@@ -146,23 +153,25 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                         nn.Conv2d(1, kernel_dim, (K, self.instr_dim)) for K in kernel_sizes])
                     self.final_instr_dim = kernel_dim * len(kernel_sizes)
 
-            if self.lang_model == 'attgru':
-                self.memory2key = nn.Linear(self.memory_size, self.final_instr_dim)
+                if self.lang_model == 'attgru':
+                    self.memory2key = nn.Linear(self.memory_size, self.final_instr_dim)
 
             num_module = 2
             self.controllers = []
+
             for ni in range(num_module):
                 mod = FiLM(
                     in_features=self.final_instr_dim,
-                    out_features=128 if ni < num_module-1 else self.image_dim,
+                    out_features=128 if ni < num_module-1 else self.final_instr_dim,
                     in_channels=128, imm_channels=128)
                 self.controllers.append(mod)
                 self.add_module('FiLM_' + str(ni), mod)
 
         # Define memory and resize image embedding
         self.embedding_size = self.image_dim
-        if self.use_memory:
+        if self.cpv or self.use_memory:
             self.memory_rnn = nn.LSTMCell(self.image_dim, self.memory_dim)
+            self.obs_rnn = nn.LSTMCell(self.image_dim, self.memory_dim)
             self.embedding_size = self.semi_memory_size
 
         # Define actor's model
@@ -273,7 +282,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         x = F.relu(self.film_pool(x))
         x = x.reshape(x.shape[0], -1)
 
-        if self.use_memory:
+        if self.cpv or self.use_memory:
             hidden = (memory[:, :self.semi_memory_size], memory[:, self.semi_memory_size:])
             hidden = self.memory_rnn(x, hidden)
             img_embedding = hidden[0]
@@ -282,7 +291,11 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             img_embedding = x
 
         if self.cpv:
-            print("Running CPV")
+            x = torch.transpose(torch.transpose(obs.image, 1, 3), 2, 3)
+
+            if 'pixel' in self.arch:
+                x /= 256.0
+            x = self.image_conv(x)
             for controller in self.controllers: # These are the FiLM Modules
                 out = controller(x, instr_embedding)['unmasked']
                 if self.res:
@@ -292,7 +305,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             x = x.reshape(x.shape[0], -1)
             obs_embedding = x
             embedding = instr_embedding - img_embedding
-            embedding = torch.cat([plan, obs_embedding], dim=1)
+            embedding = torch.cat([embedding, obs_embedding], dim=1)
         else:
             embedding = img_embedding
 

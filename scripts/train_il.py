@@ -5,13 +5,13 @@ Script to train agent through imitation learning using demonstrations.
 """
 
 import os
+import sys
 import csv
 import copy
 import gym
 import time
 import datetime
 import numpy as np
-import sys
 import logging
 import torch
 
