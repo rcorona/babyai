@@ -39,7 +39,6 @@ class FiLM(nn.Module):
 
         x = F.relu(self.bn1(self.conv1(x)))
         x = self.conv2(x)
-
         weight = self.weight(y).unsqueeze(2).unsqueeze(3)
         bias = self.bias(y).unsqueeze(2).unsqueeze(3)
         out = x * weight + bias
@@ -176,7 +175,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         # Define actor's model
         if self.cpv:
-            input_dim = self.embedding_size * 2
+            input_dim = self.memory_dim * 2
+            # input_dim = self.embedding_size * 2
         else:
             input_dim = self.embedding_size
         self.actor = nn.Sequential(
@@ -248,6 +248,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def forward(self, obs, memory, instr_embedding=None):
         if self.use_instr and instr_embedding is None:
             instr_embedding = self._get_instr_embedding(obs.instr)
+            if len(instr_embedding.shape) < 2:
+                instr_embedding = instr_embedding.unsqueeze(0)
         if self.use_instr and self.lang_model == "attgru":
             # outputs: B x L x D
             # memory: B x M
@@ -269,7 +271,6 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             instr_embedding = (instr_embedding * attention[:, :, None]).sum(1)
 
         x = torch.transpose(torch.transpose(obs.image, 1, 3), 2, 3)
-
         if 'pixel' in self.arch:
             x /= 256.0
         x = self.image_conv(x)
@@ -303,7 +304,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                 x = out
             x = F.relu(self.film_pool(x))
             x = x.reshape(x.shape[0], -1)
-            obs_embedding = x
+            obs_embedding = self.obs_rnn(x)[0]
+            # obs_embedding = x
             embedding = instr_embedding - img_embedding
             embedding = torch.cat([embedding, obs_embedding], dim=1)
         else:
@@ -319,6 +321,9 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         x = self.critic(embedding)
         value = x.squeeze(1)
+
+        print(", ".join("{:.4f}".format(float(p)) for p in dist.probs[0]))
+
 
         return {'dist': dist, 'value': value, 'memory': memory, 'extra_predictions': extra_predictions}
 
