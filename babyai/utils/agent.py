@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
 import torch.nn.functional as F
+import pdb
 # import revtok
 
 class Agent(ABC):
@@ -312,6 +313,7 @@ class BotAgent:
 
 def load_agent(env, model_name, demos_name=None, demos_origin=None, argmax=True, env_name=None, model_path=None):
     # env_name needs to be specified for demo agents
+    
     if model_name == 'BOT':
         return BotAgent(env)
 

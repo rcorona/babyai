@@ -36,6 +36,8 @@ parser.add_argument("--worst-episodes-to-show", type=int, default=10,
                     help="The number of worse episodes to show")
 parser.add_argument("--model_path", type=str, help='Path to pretrained model to evaluate', default=None)
 parser.add_argument("--results_path", type=str, help='Path to store results', default=None)
+parser.add_argument("--cpv", action="store_true",
+                    help="run with cpv formulation")
 
 def main(args, seed, episodes):
     # Set seed for all randomness sources
