@@ -68,7 +68,7 @@ class ArgumentParser(argparse.ArgumentParser):
         self.add_argument("--no-instr", action="store_true", default=False,
                             help="don't use instructions in the model")
         self.add_argument("--instr-arch", default="gru",
-                            help="arch to encode instructions, possible values: gru, bigru, conv, bow (default: gru)")
+                            help="arch to encode instructions, possible values: gru, bigru, conv, bow, lstm (default: gru)")
         self.add_argument("--no-mem", action="store_true", default=False,
                             help="don't use memory in the model")
         self.add_argument("--arch", default='bow_endpool_res',
@@ -81,6 +81,8 @@ class ArgumentParser(argparse.ArgumentParser):
                             help="number of epochs between two validation checks (default: 1)")
         self.add_argument("--val-episodes", type=int, default=500,
                             help="number of episodes used to evaluate the agent, and to evaluate validation accuracy")
+        self.add_argument("--val-batch-size", type=int, default=1280,
+                                help="batch size for PPO (default: 1280)")
 
     def parse_args(self):
         """

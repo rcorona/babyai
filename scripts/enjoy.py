@@ -3,12 +3,15 @@
 """
 Visualize the performance of a model on a given environment.
 """
-
+import os
+import sys
 import argparse
 import gym
 import time
-
+sys.path.insert(0, os.environ['BABYAI_ROOT'])
+sys.path.insert(0, os.path.join(os.environ['BABYAI_ROOT'], 'babyai'))
 import babyai.utils as utils
+from PIL import Image, ImageDraw
 
 # Parse arguments
 
@@ -29,6 +32,10 @@ parser.add_argument("--pause", type=float, default=0.1,
                     help="the pause between two consequent actions of an agent")
 parser.add_argument("--manual-mode", action="store_true", default=False,
                     help="Allows you to take control of the agent at any point of time")
+parser.add_argument("--save-loc", default="vis",
+                    help="What folder to save the visualization in")
+parser.add_argument("--samples", type=int, default=1,
+                    help="How many episodes to run for")
 
 args = parser.parse_args()
 
@@ -67,6 +74,11 @@ done = True
 
 action = None
 
+try:
+    os.makedirs(args.save_loc)
+except OSError as e:
+    pass
+
 def keyDownCb(keyName):
     global obs
     # Avoiding processing of observation by agent for wrong key clicks
@@ -88,11 +100,25 @@ def keyDownCb(keyName):
         obs = env.reset()
         print("Mission: {}".format(obs["mission"]))
 
-step = 0
+def writeMission(sample, mission):
+    txt = Image.new('RGB', sample.size, (0,0,0))
+    d = ImageDraw.Draw(txt)
+    d.text((20,20), mission, fill=(255,255,255))
+    return txt
+
+step = 1
 episode_num = 0
-while True:
+while episode_num < args.samples:
+    save_location = args.save_loc + "/" + str(episode_num)
+    try:
+        os.makedirs(save_location)
+    except OSError as e:
+        pass
     time.sleep(args.pause)
-    renderer = env.render("human")
+    renderer = env.render("rgb_array")
+    img = Image.fromarray(renderer, 'RGB')
+    img.save(save_location + '/' + str(step) + '.png')
+
     if args.manual_mode and renderer.window is not None:
         renderer.window.setKeyDownCb(keyDownCb)
     else:
@@ -102,19 +128,22 @@ while True:
         if 'dist' in result and 'value' in result:
             dist, value = result['dist'], result['value']
             dist_str = ", ".join("{:.4f}".format(float(p)) for p in dist.probs[0])
-            print("step: {}, mission: {}, dist: {}, entropy: {:.2f}, value: {:.2f}".format(
-                step, obs["mission"], dist_str, float(dist.entropy()), float(value)))
+            print("step: {}, mission: {}, action: {}, dist: {}, entropy: {:.2f}, value: {:.2f}".format(
+                step, obs["mission"], result['action'], dist_str, float(dist.entropy()), float(value)))
         else:
             print("step: {}, mission: {}".format(step, obs['mission']))
         if done:
             print("Reward:", reward)
+            step += 1
+            txt = writeMission(img, obs['mission'])
+            txt.save(save_location + '/0.png')
             episode_num += 1
             env.seed(args.seed + episode_num)
             obs = env.reset()
             agent.on_reset()
-            step = 0
+            step = 1
         else:
             step += 1
 
-    if renderer.window is None:
-        break
+    # if renderer.window is None:
+    #     break

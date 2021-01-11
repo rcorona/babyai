@@ -41,6 +41,12 @@ parser.add_argument("--save-interval", type=int, default=1,
                     help="number of epochs between two saves (default: 1, 0 means no saving)")
 parser.add_argument("--cpv", action="store_true",
                     help="run with cpv formulation")
+parser.add_argument("--homomorphic-loss", action="store_true",
+                    help="run with homomorphic loss")
+parser.add_argument("--obs-clean", action="store_true",
+                    help="input observation without rnn")
+parser.add_argument("--skip-handling", action="store_true",
+                    help="skip that thing that does something we don't know")
 
 
 def main(args):

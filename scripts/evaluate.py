@@ -3,14 +3,16 @@
 """
 Evaluate a trained model or bot
 """
-
+import sys
+import os
 import argparse
 import gym
 import time
 import datetime
 import pdb
 import pickle
-
+sys.path.insert(0, os.environ['BABYAI_ROOT'])
+sys.path.insert(0, os.path.join(os.environ['BABYAI_ROOT'], 'babyai'))
 import babyai.utils as utils
 from babyai.evaluate import evaluate_demo_agent, batch_evaluate, evaluate
 # Parse arguments
@@ -40,11 +42,11 @@ parser.add_argument("--results_path", type=str, help='Path to store results', de
 def main(args, seed, episodes):
     # Set seed for all randomness sources
     utils.seed(seed)
-   
-    # Keep track of results per task. 
+
+    # Keep track of results per task.
     results = {}
 
-    for env_name in args.env: 
+    for env_name in args.env:
 
         start_time = time.time()
 
@@ -119,5 +121,5 @@ if __name__ == "__main__":
 
     results = main(args, args.seed, args.episodes)
 
-    # Store results. 
+    # Store results.
     pickle.dump(results, open(args.results_path, 'wb'))

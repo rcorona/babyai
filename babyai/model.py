@@ -81,7 +81,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def __init__(self, obs_space, action_space,
                  image_dim=128, memory_dim=128, instr_dim=128,
                  use_instr=False, lang_model="gru", use_memory=False,
-                 arch="bow_endpool_res", aux_info=None, cpv=False):
+                 arch="bow_endpool_res", aux_info=None, cpv=False, obs_clean=False):
         super().__init__()
 
         endpool = 'endpool' in arch
@@ -103,6 +103,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         self.obs_space = obs_space
         self.cpv = cpv
+        self.obs_clean = obs_clean
 
 
         for part in self.arch.split('_'):
@@ -245,7 +246,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def semi_memory_size(self):
         return self.memory_dim
 
-    def forward(self, obs, memory, instr_embedding=None):
+    def forward(self, obs, memory, obs_memory=None, instr_embedding=None):
         if self.use_instr and instr_embedding is None:
             instr_embedding = self._get_instr_embedding(obs.instr)
             if len(instr_embedding.shape) < 2:
@@ -304,10 +305,10 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                 x = out
             x = F.relu(self.film_pool(x))
             x = x.reshape(x.shape[0], -1)
-            obs_embedding = self.obs_rnn(x)[0]
-            # obs_embedding = x
+
+            obs_embedding = self.obs_rnn(x, obs_memory)
             embedding = instr_embedding - img_embedding
-            embedding = torch.cat([embedding, obs_embedding], dim=1)
+            embedding = torch.cat([embedding, obs_embedding[0]], dim=1)
         else:
             embedding = img_embedding
 
@@ -316,13 +317,18 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         else:
             extra_predictions = dict()
 
+        if self.cpv:
+            extra_predictions['img_embedding'] = img_embedding
+            extra_predictions['instr_embedding'] = instr_embedding
+            extra_predictions['obs_memory'] = obs_embedding
+
         x = self.actor(embedding)
         dist = Categorical(logits=F.log_softmax(x, dim=1))
 
         x = self.critic(embedding)
         value = x.squeeze(1)
 
-        print(", ".join("{:.4f}".format(float(p)) for p in dist.probs[0]))
+        # print(", ".join("{:.4f}".format(float(p)) for p in dist.probs[0]))
 
 
         return {'dist': dist, 'value': value, 'memory': memory, 'extra_predictions': extra_predictions}
@@ -330,7 +336,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def _get_instr_embedding(self, instr):
         lengths = (instr != 0).sum(1).long()
 
-        if self.cpv:
+        if self.lang_model == 'lstm':
             out, _ = self.instr_rnn(self.word_embedding(instr))
             return out
 

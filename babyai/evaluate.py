@@ -105,7 +105,7 @@ def batch_evaluate(agent, env_name, seed, episodes, return_obss_actions=False, p
         seeds = range(seed + i * num_envs, seed + (i + 1) * num_envs)
         env.seed(seeds)
 
-        # Reset agent. 
+        # Reset agent.
         if hasattr(agent, 'reset'):
             agent.reset()
 

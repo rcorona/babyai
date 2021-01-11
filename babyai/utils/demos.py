@@ -11,7 +11,7 @@ def get_demos_path(demos=None, env=None, origin=None, valid=False):
     demos_path = (demos + valid_suff
                   if demos
                   else env + "_" + origin + valid_suff) + '.pkl'
-    return os.path.join(utils.storage_dir(), 'demos', demos_path)
+    return os.path.join(utils.storage_dir(), 'pruned_demos', demos_path)
 
 
 def load_demos(path, raise_not_found=True):
