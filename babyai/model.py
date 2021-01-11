@@ -305,7 +305,6 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
                 x = out
             x = F.relu(self.film_pool(x))
             x = x.reshape(x.shape[0], -1)
-
             obs_embedding = self.obs_rnn(x, obs_memory)
             embedding = instr_embedding - img_embedding
             embedding = torch.cat([embedding, obs_embedding[0]], dim=1)
