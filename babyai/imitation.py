@@ -146,7 +146,7 @@ class ImitationLearning(object):
                 self.acmodel = ACModel(self.obss_preprocessor.obs_space, action_space,
                                        args.image_dim, args.memory_dim, args.instr_dim,
                                        not self.args.no_instr, self.args.instr_arch,
-                                       not self.args.no_mem, self.args.arch, cpv=self.args.cpv)
+                                       not self.args.no_mem, self.args.arch, cpv=self.args.cpv, obs=self.args.obs)
         self.obss_preprocessor.vocab.save()
         utils.save_model(self.acmodel, args.model)
 
@@ -221,6 +221,14 @@ class ImitationLearning(object):
             log["policy_loss"].append(_log["policy_loss"])
             log["accuracy"].append(_log["accuracy"])
 
+            if self.args.complex_batch:
+                _log =  self.run_epoch_recurrence_one_batch(batch, is_training=is_training, complex_batch=True)
+
+                log["entropy"].append(_log["entropy"])
+                log["policy_loss"].append(_log["policy_loss"])
+                log["accuracy"].append(_log["accuracy"])
+
+
             offset += batch_size
         log['total_frames'] = frames
 
@@ -229,8 +237,12 @@ class ImitationLearning(object):
 
         return log
 
-    def run_epoch_recurrence_one_batch(self, batch, is_training=False):
-        batch = utils.demos.transform_demos(batch)
+    def run_epoch_recurrence_one_batch(self, batch, is_training=False, complex_batch=False):
+
+        if complex_batch:
+            batch = utils.demos.transform_merge_demos(batch)
+        else:
+            batch = utils.demos.transform_demos(batch)
         batch.sort(key=len, reverse=True)
         # Constructing flat batch and indices pointing to start of each demonstration
         flat_batch = []
@@ -254,9 +266,10 @@ class ImitationLearning(object):
 
         # Memory to be stored
         memories = torch.zeros([len(flat_batch), self.acmodel.memory_size], device=self.device)
+        obs_memories = torch.zeros([len(flat_batch), self.acmodel.memory_size], device=self.device)
         episode_ids = np.zeros(len(flat_batch))
         memory = torch.zeros([len(batch), self.acmodel.memory_size], device=self.device)
-
+        obs_memory = torch.zeros([len(batch), self.acmodel.memory_size], device=self.device)
         preprocessed_first_obs = self.obss_preprocessor(obss[inds], device=self.device)
         instr_embedding = self.acmodel._get_instr_embedding(preprocessed_first_obs.instr)
 
@@ -269,12 +282,16 @@ class ImitationLearning(object):
                 preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
                 with torch.no_grad():
                     # taking the memory till len(inds), as demos beyond that have already finished
-                    new_memory = self.acmodel(
+                    out = self.acmodel(
                         preprocessed_obs,
-                        memory[:len(inds), :], instr_embedding=instr_embedding[:len(inds)])['memory']
+                        memory[:len(inds), :], obs_memory=obs_memory[:len(inds), :], instr_embedding=instr_embedding[:len(inds)])
 
+                new_memory = out['memory']
+                new_obs_memory = out['extra_predictions']['obs_memory']
                 memories[inds, :] = memory[:len(inds), :]
+                obs_memories[inds, :] = obs_memory[:len(inds), :]
                 memory[:len(inds), :] = new_memory
+                obs_memory[:len(inds), :] = new_obs_memory
                 episode_ids[inds] = range(len(inds))
 
                 # Updating inds, by removing those indices corresponding to which the demonstrations have finished
@@ -291,7 +308,7 @@ class ImitationLearning(object):
 
         indexes = self.starting_indexes(num_frames)
         memory = memories[indexes]
-        obs_memory = (torch.zeros((memory.shape[0], memory.shape[1]//2), dtype=torch.float, device=self.device), torch.zeros((memory.shape[0], memory.shape[1]//2), dtype=torch.float, device=self.device))
+        obs_memory = obs_memories[indexes]
         accuracy = 0
         total_frames = len(indexes) * self.args.recurrence
 
@@ -301,11 +318,12 @@ class ImitationLearning(object):
             action_step = action_true[indexes]
             mask_step = mask[indexes]
             model_results = self.acmodel(
-                preprocessed_obs, memory * mask_step, obs_memory = obs_memory,
+                preprocessed_obs, memory * mask_step, obs_memory = obs_memory * mask_step,
                 instr_embedding=instr_embedding[episode_ids[indexes]])
             dist = model_results['dist']
             memory = model_results['memory']
-            obs_memory = model_results['extra_predictions']['obs_memory']
+            if self.args.cpv:
+                obs_memory = model_results['extra_predictions']['obs_memory']
 
             entropy = dist.entropy().mean()
             policy_loss = -dist.log_prob(action_step).mean()
@@ -318,34 +336,9 @@ class ImitationLearning(object):
             final_policy_loss += policy_loss
             indexes += 1
 
-        if self.args.homomorphic_loss:
-            indexes = self.starting_indexes(num_frames)
-            memory = torch.zeros(memory.shape, dtype=torch.float, device=self.device)
-            obs_memory = (torch.zeros((memory.shape[0], memory.shape[1]//2), dtype=torch.float, device=self.device), torch.zeros((memory.shape[0], memory.shape[1]//2), dtype=torch.float, device=self.device))
 
-            for _ in range(self.args.recurrence):
-                obs = obss[indexes]
-                preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
-                mask_step = mask[indexes]
-                model_results = self.acmodel(
-                    preprocessed_obs, memory * mask_step, obs_memory = obs_memory,
-                    instr_embedding=instr_embedding[episode_ids[indexes]])
-                memory = model_results['memory']
-                obs_memory = model_results['extra_predictions']['obs_memory']
-                indexes += 1
 
-            img_embeddings = model_results['extra_predictions']['img_embedding']
-            print(max(episode_ids[indexes]))
-            print(episode_ids)
-            print([episode_ids[i] for i in self.starting_indexes(num_frames)])
-            print([episode_ids[i] for i in indexes])
-
-            print(torch.tensor(sum([img_embeddings[em] for em in range(len(indexes)) if episode_ids[indexes[em]] == len(indexes) - 2])).shape)
-            img_embeddings = torch.stack([sum([img_embeddings[em] for em in range(len(indexes)) if episode_ids[indexes[em]] == i]) for i in range(len(batch))], dim=0)
-            instr_embedding = torch.stack(instr_embedding, dim=0)
-            hom_loss = torch.nn.functional.mse_loss(img_embedding, instr_embedding)
         final_loss /= self.args.recurrence
-        final_loss += hom_loss
         if is_training:
             self.optimizer.zero_grad()
             final_loss.backward()
@@ -510,7 +503,7 @@ class ImitationLearning(object):
 
                 if torch.cuda.is_available():
                     self.acmodel.cpu()
-                utils.save_model(self.acmodel, self.args.model)
+                utils.save_model(self.acmodel, self.args.model + "_" + str(status['i']))
                 self.obss_preprocessor.vocab.save()
                 if torch.cuda.is_available():
                     self.acmodel.cuda()

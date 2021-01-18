@@ -47,6 +47,11 @@ parser.add_argument("--obs-clean", action="store_true",
                     help="input observation without rnn")
 parser.add_argument("--skip-handling", action="store_true",
                     help="skip that thing that does something we don't know")
+parser.add_argument("--complex-batch", action="store_true",
+                    help="train on complex batches")
+parser.add_argument("--obs", action="store_true",
+                    help="use an observation encoder")
+
 
 
 def main(args):

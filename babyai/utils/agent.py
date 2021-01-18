@@ -204,6 +204,7 @@ class ModelAgent(Agent):
         self.device = next(self.model.parameters()).device
         self.argmax = argmax
         self.memory = None
+        self.obs_memory = None
 
     def act_batch(self, many_obs):
         if self.memory is None:
@@ -211,13 +212,19 @@ class ModelAgent(Agent):
                 len(many_obs), self.model.memory_size, device=self.device)
         elif self.memory.shape[0] != len(many_obs):
             raise ValueError("stick to one batch size for the lifetime of an agent")
+        if self.obs_memory is None:
+            self.obs_memory = torch.zeros(
+                len(many_obs), self.model.memory_size, device=self.device)
+        elif self.memory.shape[0] != len(many_obs):
+            raise ValueError("stick to one batch size for the lifetime of an agent")
         preprocessed_obs = self.obss_preprocessor(many_obs, device=self.device)
 
         with torch.no_grad():
-            model_results = self.model(preprocessed_obs, self.memory)
+            model_results = self.model(preprocessed_obs, self.memory, obs_memory=self.obs_memory)
             dist = model_results['dist']
             value = model_results['value']
             self.memory = model_results['memory']
+            self.obs_memory = model_results['extra_predictions']['obs_memory']
 
         if self.argmax:
             action = dist.probs.argmax(1)
@@ -313,7 +320,7 @@ class BotAgent:
 
 def load_agent(env, model_name, demos_name=None, demos_origin=None, argmax=True, env_name=None, model_path=None):
     # env_name needs to be specified for demo agents
-    
+
     if model_name == 'BOT':
         return BotAgent(env)
 

@@ -81,7 +81,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
     def __init__(self, obs_space, action_space,
                  image_dim=128, memory_dim=128, instr_dim=128,
                  use_instr=False, lang_model="gru", use_memory=False,
-                 arch="bow_endpool_res", aux_info=None, cpv=False, obs_clean=False):
+                 arch="bow_endpool_res", aux_info=None, cpv=False, obs=True):
         super().__init__()
 
         endpool = 'endpool' in arch
@@ -103,7 +103,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         self.obs_space = obs_space
         self.cpv = cpv
-        self.obs_clean = obs_clean
+        self.obs = obs
 
 
         for part in self.arch.split('_'):
@@ -132,7 +132,7 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         # Define instruction embedding
         if self.use_instr:
-            if self.cpv:
+            if self.lang_model == 'lstm':
                 self.word_embedding = nn.Embedding(obs_space["instr"], self.instr_dim)
                 self.instr_rnn = LanguageEmbedding(self.instr_dim, self.instr_dim)
                 self.final_instr_dim = self.instr_dim
@@ -176,7 +176,10 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
 
         # Define actor's model
         if self.cpv:
-            input_dim = self.memory_dim * 2
+            if self.obs:
+                input_dim = self.memory_dim * 2
+            else:
+                input_dim = self.memory_dim
             # input_dim = self.embedding_size * 2
         else:
             input_dim = self.embedding_size
@@ -293,21 +296,25 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             img_embedding = x
 
         if self.cpv:
-            x = torch.transpose(torch.transpose(obs.image, 1, 3), 2, 3)
-
-            if 'pixel' in self.arch:
-                x /= 256.0
-            x = self.image_conv(x)
-            for controller in self.controllers: # These are the FiLM Modules
-                out = controller(x, instr_embedding)['unmasked']
-                if self.res:
-                    out += x
-                x = out
-            x = F.relu(self.film_pool(x))
-            x = x.reshape(x.shape[0], -1)
-            obs_embedding = self.obs_rnn(x, obs_memory)
-            embedding = instr_embedding - img_embedding
-            embedding = torch.cat([embedding, obs_embedding[0]], dim=1)
+            if self.obs:
+                x = torch.transpose(torch.transpose(obs.image, 1, 3), 2, 3)
+                if 'pixel' in self.arch:
+                    x /= 256.0
+                x = self.image_conv(x)
+                for controller in self.controllers: # These are the FiLM Modules
+                    out = controller(x, instr_embedding)['unmasked']
+                    if self.res:
+                        out += x
+                    x = out
+                x = F.relu(self.film_pool(x))
+                x = x.reshape(x.shape[0], -1)
+                hidden = (obs_memory[:, :self.semi_memory_size], obs_memory[:, self.semi_memory_size:])
+                obs_embedding = self.obs_rnn(x, hidden)
+                obs_memory = torch.cat(obs_embedding, dim=1)
+                embedding = instr_embedding - img_embedding
+                embedding = torch.cat([embedding, obs_embedding[0]], dim=1)
+            else:
+                embedding = instr_embedding - img_embedding
         else:
             embedding = img_embedding
 
@@ -319,7 +326,9 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
         if self.cpv:
             extra_predictions['img_embedding'] = img_embedding
             extra_predictions['instr_embedding'] = instr_embedding
-            extra_predictions['obs_memory'] = obs_embedding
+            extra_predictions['obs_memory'] = obs_memory
+        else:
+            extra_predictions['obs_memory'] = None
 
         x = self.actor(embedding)
         dist = Categorical(logits=F.log_softmax(x, dim=1))
