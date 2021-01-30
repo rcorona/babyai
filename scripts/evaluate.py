@@ -124,4 +124,5 @@ if __name__ == "__main__":
     results = main(args, args.seed, args.episodes)
 
     # Store results.
+    utils.create_folders_if_necessary(args.results_path)
     pickle.dump(results, open(args.results_path, 'wb'))

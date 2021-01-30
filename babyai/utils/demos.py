@@ -7,12 +7,13 @@ from .. import utils
 
 
 
-def get_demos_path(demos=None, env=None, origin=None, valid=False):
+def get_demos_path(demos=None, size="10k", env=None, origin=None, valid=False):
     valid_suff = '_valid' if valid else ''
     demos_path = (demos + valid_suff
                   if demos
                   else env + "_" + origin + valid_suff) + '.pkl'
-    return os.path.join(utils.storage_dir(), 'pruned_demos', demos_path)
+    size = size + '_demos'
+    return os.path.join(utils.storage_dir(), size, demos_path)
 
 
 def load_demos(path, raise_not_found=True):
@@ -100,7 +101,9 @@ def transform_merge_demos(demos):
         for i in range(n_observations):
             obs = {'image': all_images[i],
                    'direction': directions[i],
-                   'mission': mission}
+                   'mission': mission,
+                   'submissions': [demo_1[0], demo_2[0]]
+                   }
             action = actions[i]
             done = i == n_observations - 1
             new_demo.append((obs, action, done))

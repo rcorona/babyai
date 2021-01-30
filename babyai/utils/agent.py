@@ -196,7 +196,8 @@ class ModelAgent(Agent):
             obss_preprocessor = utils.ObssPreprocessor(model_or_name)
         self.obss_preprocessor = obss_preprocessor
         if isinstance(model_or_name, str):
-            self.model = utils.load_model(model_or_name)
+            model = utils.load_model(model_or_name)
+            self.model = model['model']
             if torch.cuda.is_available():
                 self.model.cuda()
         else:

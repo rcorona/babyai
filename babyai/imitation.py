@@ -6,6 +6,7 @@ import numpy as np
 import sys
 import itertools
 import torch
+import torch.nn.functional as F
 from babyai.evaluate import batch_evaluate
 import babyai.utils as utils
 from babyai.rl import DictList
@@ -85,7 +86,7 @@ class ImitationLearning(object):
 
             self.train_demos = []
             for demos, episodes in zip(args.multi_demos, args.multi_episodes):
-                demos_path = utils.get_demos_path(demos, None, None, valid=False)
+                demos_path = utils.get_demos_path(demos, size=self.args.demos_size, valid=False)
 
                 logger.info('loading {} of {} demos'.format(episodes, demos))
                 train_demos = utils.load_demos(demos_path)
@@ -97,7 +98,7 @@ class ImitationLearning(object):
 
             self.val_demos = []
             for demos, episodes in zip(args.multi_demos, [args.val_episodes] * len(args.multi_demos)):
-                demos_path_valid = utils.get_demos_path(demos, None, None, valid=True)
+                demos_path_valid = utils.get_demos_path(demos, size=self.args.demos_size, valid=True)
                 logger.info('loading {} of {} valid demos'.format(episodes, demos))
                 valid_demos = utils.load_demos(demos_path_valid)
                 logger.info('loaded demos')
@@ -114,8 +115,8 @@ class ImitationLearning(object):
         else:
             self.env = gym.make(self.args.env)
 
-            demos_path = utils.get_demos_path(args.demos, args.env, args.demos_origin, valid=False)
-            demos_path_valid = utils.get_demos_path(args.demos, args.env, args.demos_origin, valid=True)
+            demos_path = utils.get_demos_path(args.demos, self.args.demos_size, args.env, args.demos_origin, valid=False)
+            demos_path_valid = utils.get_demos_path(args.demos, self.args.demos_size, args.env, args.demos_origin, valid=True)
 
             logger.info('loading demos')
             self.train_demos = utils.load_demos(demos_path)
@@ -137,25 +138,41 @@ class ImitationLearning(object):
                                                         getattr(self.args, 'pretrained_model', None))
 
         # Define actor-critic model
-        self.acmodel = utils.load_model(args.model, raise_not_found=False)
-        if self.acmodel is None:
+        model = utils.load_model(args.model, raise_not_found=False)
+        if model is None:
             if getattr(self.args, 'pretrained_model', None):
-                self.acmodel = utils.load_model(args.pretrained_model, raise_not_found=True)
+                model = utils.load_model(args.pretrained_model, raise_not_found=True)
+                self.acmodel = model['model']
+                self.optimizer = torch.optim.Adam(self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps)
+                if self.optimizer:
+                    self.optimizer.load_state_dict(model['optimizer'])
+                self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
+                if self.scheduler:
+                    self.scheduler.load_state_dict(model['scheduler'])
             else:
                 logger.info('Creating new model')
                 self.acmodel = ACModel(self.obss_preprocessor.obs_space, action_space,
                                        args.image_dim, args.memory_dim, args.instr_dim,
                                        not self.args.no_instr, self.args.instr_arch,
                                        not self.args.no_mem, self.args.arch, cpv=self.args.cpv, obs=self.args.obs)
+                self.optimizer = torch.optim.Adam(self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps)
+                self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
+        else:
+            self.acmodel = model['model']
+            self.optimizer = torch.optim.Adam(self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps)
+            if self.optimizer:
+                self.optimizer.load_state_dict(model['optimizer'])
+            self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
+            if self.scheduler:
+                self.scheduler.load_state_dict(model['scheduler'])
+
         self.obss_preprocessor.vocab.save()
         utils.save_model(self.acmodel, args.model)
+        utils.save_optimizer(self.optimizer, self.scheduler, args.model)
 
         self.acmodel.train()
         if torch.cuda.is_available():
             self.acmodel.cuda()
-
-        self.optimizer = torch.optim.Adam(self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -270,37 +287,47 @@ class ImitationLearning(object):
         episode_ids = np.zeros(len(flat_batch))
         memory = torch.zeros([len(batch), self.acmodel.memory_size], device=self.device)
         obs_memory = torch.zeros([len(batch), self.acmodel.memory_size], device=self.device)
-        preprocessed_first_obs = self.obss_preprocessor(obss[inds], device=self.device)
+        preprocessed_first_obs = self.obss_preprocessor(obss[inds], device=self.device, complex=complex_batch)
         instr_embedding = self.acmodel._get_instr_embedding(preprocessed_first_obs.instr)
+        if complex_batch and self.args.homomorphic_loss:
+            sub_instr_embedding = self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[0]) + self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[1])
+        img_embeddings = torch.zeros([len(batch), self.acmodel.semi_memory_size], device=self.device)
 
         # Loop terminates when every observation in the flat_batch has been handled
-        if not self.args.skip_handling:
-            while True:
-                # taking observations and done located at inds
-                obs = obss[inds]
-                done_step = done[inds]
-                preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
-                with torch.no_grad():
-                    # taking the memory till len(inds), as demos beyond that have already finished
-                    out = self.acmodel(
-                        preprocessed_obs,
-                        memory[:len(inds), :], obs_memory=obs_memory[:len(inds), :], instr_embedding=instr_embedding[:len(inds)])
+        while True:
+            # taking observations and done located at inds
+            obs = obss[inds]
+            done_step = done[inds]
+            preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
+            with torch.no_grad():
+                # taking the memory till len(inds), as demos beyond that have already finished
+                out = self.acmodel(
+                    preprocessed_obs,
+                    memory[:len(inds), :], obs_memory=obs_memory[:len(inds), :], instr_embedding=instr_embedding[:len(inds)])
 
-                new_memory = out['memory']
+            new_memory = out['memory']
+            memories[inds, :] = memory[:len(inds), :]
+            memory[:len(inds), :] = new_memory
+
+
+            if self.args.obs:
                 new_obs_memory = out['extra_predictions']['obs_memory']
-                memories[inds, :] = memory[:len(inds), :]
                 obs_memories[inds, :] = obs_memory[:len(inds), :]
-                memory[:len(inds), :] = new_memory
                 obs_memory[:len(inds), :] = new_obs_memory
-                episode_ids[inds] = range(len(inds))
 
-                # Updating inds, by removing those indices corresponding to which the demonstrations have finished
-                inds = inds[:len(inds) - sum(done_step)]
-                if len(inds) == 0:
-                    break
+            episode_ids[inds] = range(len(inds))
 
-                # Incrementing the remaining indices
-                inds = [index + 1 for index in inds]
+            # Updating inds, by removing those indices corresponding to which the demonstrations have finished
+            inds = inds[:len(inds) - sum(done_step)]
+            if self.args.homomorphic_loss and sum(done_step) > 0:
+                img_embeddings[len(inds):len(inds) + sum(done_step), :] = out['extra_predictions']['img_embedding'][len(inds):len(inds) + sum(done_step)]
+
+
+            if len(inds) == 0:
+                break
+
+            # Incrementing the remaining indices
+            inds = [index + 1 for index in inds]
 
         # Here, actual backprop upto args.recurrence happens
         final_loss = 0
@@ -337,8 +364,11 @@ class ImitationLearning(object):
             indexes += 1
 
 
-
         final_loss /= self.args.recurrence
+        if self.args.homomorphic_loss:
+            final_loss += F.mse_loss(instr_embedding, img_embeddings)
+        if complex_batch and self.args.homomorphic_loss:
+            final_loss += F.mse_loss(instr_embedding, sub_instr_embedding)
         if is_training:
             self.optimizer.zero_grad()
             final_loss.backward()
@@ -503,7 +533,11 @@ class ImitationLearning(object):
 
                 if torch.cuda.is_available():
                     self.acmodel.cpu()
-                utils.save_model(self.acmodel, self.args.model + "_" + str(status['i']))
+                utils.save_model(self.acmodel, self.args.model)
+                utils.save_optimizer(self.optimizer, self.scheduler, self.args.model)
+                utils.save_model(self.acmodel, self.args.model + "/" + str(status['i']))
+
+
                 self.obss_preprocessor.vocab.save()
                 if torch.cuda.is_available():
                     self.acmodel.cuda()

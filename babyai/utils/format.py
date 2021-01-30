@@ -74,6 +74,48 @@ class InstructionsPreprocessor(object):
         instrs = torch.tensor(instrs, device=device, dtype=torch.long)
         return instrs
 
+class SubInstructionsPreprocessor(object):
+    def __init__(self, model_name, load_vocab_from=None):
+        self.model_name = model_name
+        self.vocab = Vocabulary(model_name)
+
+        path = get_vocab_path(model_name)
+        if not os.path.exists(path) and load_vocab_from is not None:
+            # self.vocab.vocab should be an empty dict
+            secondary_path = get_vocab_path(load_vocab_from)
+            if os.path.exists(secondary_path):
+                old_vocab = Vocabulary(load_vocab_from)
+                self.vocab.copy_vocab_from(old_vocab)
+            else:
+                raise FileNotFoundError('No pre-trained model under the specified name')
+
+    def __call__(self, obss, device=None):
+        raw_instrs_1 = []
+        raw_instrs_2 = []
+        max_instr_len = 0
+
+        for obs in obss:
+            tokens_1 = re.findall("([a-z]+)", obs["submissions"][0].lower())
+            tokens_2 = re.findall("([a-z]+)", obs["submissions"][1].lower())
+            instr_1 = numpy.array([self.vocab[token] for token in tokens_1])
+            instr_2 = numpy.array([self.vocab[token] for token in tokens_2])
+
+            raw_instrs_1.append(instr_1)
+            raw_instrs_2.append(instr_2)
+            max_instr_len = max(len(instr_1), len(instr_2), max_instr_len)
+
+        instrs_1 = numpy.zeros((len(obss), max_instr_len))
+        instrs_2 = numpy.zeros((len(obss), max_instr_len))
+
+        for i, instr in enumerate(raw_instrs_1):
+            instrs_1[i, :len(instr)] = instr
+        for i, instr in enumerate(raw_instrs_2):
+            instrs_2[i, :len(instr)] = instr
+
+        instrs_1 = torch.tensor(instrs_1, device=device, dtype=torch.long)
+        instrs_2 = torch.tensor(instrs_2, device=device, dtype=torch.long)
+        return (instrs_1, instrs_2)
+
 
 class RawImagePreprocessor(object):
     def __call__(self, obss, device=None):
@@ -101,13 +143,16 @@ class ObssPreprocessor:
     def __init__(self, model_name, obs_space=None, load_vocab_from=None):
         self.image_preproc = RawImagePreprocessor()
         self.instr_preproc = InstructionsPreprocessor(model_name, load_vocab_from)
+        self.sub_instr_preproc = SubInstructionsPreprocessor(model_name, load_vocab_from)
         self.vocab = self.instr_preproc.vocab
         self.obs_space = {
             "image": 147,
             "instr": self.vocab.max_size
         }
+        if complex:
+            self.obs_space["subinstr"] = self.vocab.max_size
 
-    def __call__(self, obss, device=None):
+    def __call__(self, obss, device=None, complex=False):
         obs_ = babyai.rl.DictList()
 
         if "image" in self.obs_space.keys():
@@ -115,6 +160,9 @@ class ObssPreprocessor:
 
         if "instr" in self.obs_space.keys():
             obs_.instr = self.instr_preproc(obss, device=device)
+
+        if "subinstr" in self.obs_space.keys() and complex:
+            obs_.subinstr = self.sub_instr_preproc(obss, device=device)
 
         return obs_
 

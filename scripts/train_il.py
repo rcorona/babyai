@@ -26,6 +26,8 @@ from babyai.imitation import ImitationLearning
 parser = ArgumentParser()
 parser.add_argument("--demos", default=None,
                     help="demos filename (REQUIRED or demos-origin or multi-demos required)")
+parser.add_argument("--demos-size", default='10k',
+                    help="size of demos")
 parser.add_argument("--demos-origin", required=False,
                     help="origin of the demonstrations: human | agent (REQUIRED or demos or multi-demos required)")
 parser.add_argument("--episodes", type=int, default=0,
