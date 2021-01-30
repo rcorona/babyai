@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.environ['BABYAI_ROOT'], 'babyai'))
 from babyai.arguments import ArgumentParser
 import babyai.utils as utils
 from babyai.imitation import ImitationLearning
+import gridworld.envs
 
 
 # Parse arguments

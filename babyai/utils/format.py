@@ -1,4 +1,4 @@
-import os
+def __init__(self, model_name, obs_space=None, load_vocab_from=None, crafting=False):import os
 import json
 import numpy
 import re
@@ -61,7 +61,10 @@ class InstructionsPreprocessor(object):
         max_instr_len = 0
 
         for obs in obss:
-            tokens = re.findall("([a-z]+)", obs["mission"].lower())
+            if 'mission' in obs.keys():
+                tokens = re.findall("([a-z]+)", obs["mission"].lower())
+            else:
+                tokens = re.findall(“([a-z]+)“, obs[“instr”].lower())
             instr = numpy.array([self.vocab[token] for token in tokens])
             raw_instrs.append(instr)
             max_instr_len = max(len(instr), max_instr_len)
@@ -140,7 +143,7 @@ class IntImagePreprocessor(object):
 
 
 class ObssPreprocessor:
-    def __init__(self, model_name, obs_space=None, load_vocab_from=None):
+   def __init__(self, model_name, obs_space=None, load_vocab_from=None, crafting=False):
         self.image_preproc = RawImagePreprocessor()
         self.instr_preproc = InstructionsPreprocessor(model_name, load_vocab_from)
         self.sub_instr_preproc = SubInstructionsPreprocessor(model_name, load_vocab_from)
@@ -151,6 +154,8 @@ class ObssPreprocessor:
         }
         if complex:
             self.obs_space["subinstr"] = self.vocab.max_size
+        if crafting:
+            self.obs_space[“image”] = 990
 
     def __call__(self, obss, device=None, complex=False):
         obs_ = babyai.rl.DictList()
