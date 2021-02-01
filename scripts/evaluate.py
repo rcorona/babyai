@@ -15,6 +15,7 @@ sys.path.insert(0, os.environ['BABYAI_ROOT'])
 sys.path.insert(0, os.path.join(os.environ['BABYAI_ROOT'], 'babyai'))
 import babyai.utils as utils
 from babyai.evaluate import evaluate_demo_agent, batch_evaluate, evaluate
+import gridworld.envs
 # Parse arguments
 
 parser = argparse.ArgumentParser()

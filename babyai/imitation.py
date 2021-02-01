@@ -153,13 +153,13 @@ class ImitationLearning(object):
 
                 logger.info('Creating new model')
                 in_channels = 3
-                if self.crafting:
+                if self.args.crafting:
                     in_channels = 9
                 self.acmodel = ACModel(self.obss_preprocessor.obs_space, action_space,
                                        args.image_dim, args.memory_dim, args.instr_dim,
                                        not self.args.no_instr, self.args.instr_arch,
                                        not self.args.no_mem, self.args.arch, cpv=self.args.cpv, obs=self.args.obs,
-                                       in_channels=in_channels, crafting=self.crafting)
+                                       in_channels=in_channels, crafting=self.args.crafting)
                 self.optimizer = torch.optim.Adam(self.acmodel.parameters(), self.args.lr, eps=self.args.optim_eps)
                 self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=100, gamma=0.9)
         else:

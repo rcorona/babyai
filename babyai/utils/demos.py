@@ -67,7 +67,7 @@ def transform_demos(demos):
                 obs = {'image': all_images[i],
                         'direction': directions[i],
                         'mission': mission}
-            action = actions[i]
+            action = 0 if actions[i] == 6 else actions[i]
             done = i == n_observations - 1
             new_demo.append((obs, action, done))
         new_demos.append(new_demo)
@@ -104,7 +104,7 @@ def transform_merge_demos(demos):
                    'mission': mission,
                    'submissions': [demo_1[0], demo_2[0]]
                    }
-            action = actions[i]
+            action = 0 if actions[i] == 6 else actions[i]
             done = i == n_observations - 1
             new_demo.append((obs, action, done))
         new_demos.append(new_demo)

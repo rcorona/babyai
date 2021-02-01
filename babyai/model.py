@@ -55,7 +55,7 @@ class ImageBOWEmbedding(nn.Module):
          self.embedding = nn.Embedding(in_channels * max_value, embedding_dim)
          self.apply(initialize_parameters)
 
-     def forward(self, inputs):
+    def forward(self, inputs):
          offset_list = [self.max_value*i for i in range(self.in_channels)]
          offsets = torch.Tensor(offset_list).to(inputs.device)
          inputs = (inputs + offsets[None, :, None, None]).long()
@@ -326,6 +326,8 @@ class ACModel(nn.Module, babyai.rl.RecurrentACModel):
             x = F.relu(self.film_pool(x))
             x = x.reshape(x.shape[0], -1)
             hidden = (obs_memory[:, :self.semi_memory_size], obs_memory[:, self.semi_memory_size:])
+            if self.crafting and x.shape[1] > 128:
+                x = self.pre_lstm_embedding(x)
             obs_embedding = self.obs_rnn(x, hidden)
             obs_memory = torch.cat(obs_embedding, dim=1)
             embedding = torch.cat([embedding, obs_embedding[0]], dim=1)

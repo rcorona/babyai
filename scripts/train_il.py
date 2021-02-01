@@ -54,6 +54,8 @@ parser.add_argument("--complex-batch", action="store_true",
                     help="train on complex batches")
 parser.add_argument("--obs", action="store_true",
                     help="use an observation encoder")
+parser.add_argument("--crafting", action="store_true",
+                    help="run with crafting env")
 
 
 
