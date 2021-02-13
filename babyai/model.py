@@ -48,18 +48,18 @@ class FiLM(nn.Module):
 
 class ImageBOWEmbedding(nn.Module):
     def __init__(self, max_value, embedding_dim, in_channels=3):
-         super().__init__()
-         self.max_value = max_value
-         self.embedding_dim = embedding_dim
-         self.in_channels = in_channels
-         self.embedding = nn.Embedding(in_channels * max_value, embedding_dim)
-         self.apply(initialize_parameters)
+        super().__init__()
+        self.max_value = max_value
+        self.embedding_dim = embedding_dim
+        self.in_channels = in_channels
+        self.embedding = nn.Embedding(in_channels * max_value, embedding_dim)
+        self.apply(initialize_parameters)
 
     def forward(self, inputs):
-         offset_list = [self.max_value*i for i in range(self.in_channels)]
-         offsets = torch.Tensor(offset_list).to(inputs.device)
-         inputs = (inputs + offsets[None, :, None, None]).long()
-         return self.embedding(inputs).sum(1).permute(0, 3, 1, 2)
+        offset_list = [self.max_value*i for i in range(self.in_channels)]
+        offsets = torch.Tensor(offset_list).to(inputs.device)
+        inputs = (inputs + offsets[None, :, None, None]).long()
+        return self.embedding(inputs).sum(1).permute(0, 3, 1, 2)
 
 class LanguageEmbedding(nn.Module):
     def __init__(self, input_dim, output_dim, num_layers=2):

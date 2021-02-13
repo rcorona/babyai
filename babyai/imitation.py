@@ -208,6 +208,42 @@ class ImitationLearning(object):
             return np.arange(0, num_frames, self.args.recurrence)
         else:
             return np.arange(0, num_frames, self.args.recurrence)[:-1]
+        
+    def get_next_indexes(self, step, demo_starts, demo_lens):
+        # for each demo, split into recurrence sized chunks
+        # Find which chuncks are still running 
+        if step == 0:
+            demo_chunk_starts = []
+            demo_chunk_lens = []
+            full_demo_starts = []
+            chunk_num = 0
+            for s, l in zip(demo_starts, demo_lens):
+                demo_chunk_starts.append(s)
+                full_demo_starts.append(chunk_num)
+                len_left = l
+                num_recs = 0
+                chunk_num += 1
+                while len_left > self.args.recurrence:
+                    num_recs += 1
+                    demo_chunk_lens.append(self.args.recurrence)
+                    len_left -= self.args.recurrence
+                    demo_chunk_starts.append(s + self.args.recurrence * num_recs)
+                    chunk_num += 1
+                demo_chunk_lens.append(len_left)
+            self._demo_chunk_lens = np.array(demo_chunk_lens)
+            self._demo_chunk_starts = np.array(demo_chunk_starts)
+            self._full_demo_starts = np.array(full_demo_starts)
+        starts_to_get = self._demo_chunk_starts[self._demo_chunk_lens > step]
+        indexes = starts_to_get + step
+        memory_indexes = []
+        for t in range(len(self._demo_chunk_starts)):
+            if self._demo_chunk_starts[t] in starts_to_get:
+                memory_indexes.append(t)
+        return indexes, memory_indexes
+#         if num_frames % self.args.recurrence == 0:
+#             return np.arange(0, num_frames, self.args.recurrence)
+#         else:
+#             return np.arange(0, num_frames, self.args.recurrence)[:-1]
 
     def run_epoch_recurrence(self, demos, is_training=False, indices=None):
         if not indices:
@@ -244,11 +280,11 @@ class ImitationLearning(object):
             log["accuracy"].append(_log["accuracy"])
 
             if self.args.complex_batch:
-                _log =  self.run_epoch_recurrence_one_batch(batch, is_training=is_training, complex_batch=True)
+                #_log =  self.run_epoch_recurrence_one_batch(batch, is_training=is_training, complex_batch=True)
 
-                log["entropy"].append(_log["entropy"])
-                log["policy_loss"].append(_log["policy_loss"])
-                log["accuracy"].append(_log["accuracy"])
+                log["complex_entropy"].append(_log["complex_entropy"])
+                log["complex_policy_loss"].append(_log["complex_policy_loss"])
+                log["complex_accuracy"].append(_log["complex_accuracy"])
 
 
             offset += batch_size
@@ -259,21 +295,58 @@ class ImitationLearning(object):
 
         return log
 
-    def run_epoch_recurrence_one_batch(self, batch, is_training=False, complex_batch=False):
+    def run_epoch_recurrence_one_batch(self, batch, is_training=False):
+        print("one batch")
+        reg_batch = utils.demos.transform_demos(batch)
+        outputs = self._run_batch(reg_batch, is_training, complex_batch=False)
+        final_loss = outputs['final_loss']
 
-        if complex_batch:
-            batch = utils.demos.transform_merge_demos(batch)
-        else:
-            batch = utils.demos.transform_demos(batch)
+
+        if self.args.homomorphic_loss:
+            final_loss += F.mse_loss(outputs['instr_embedding'], outputs['img_embeddings'])
+            
+        if self.args.complex_batch:
+            complex_batch = utils.demos.transform_merge_demos(batch)
+            complex_outputs = self._run_batch(complex_batch, is_training, complex_batch=True)
+            final_loss += complex_outputs['final_loss']
+            if self.args.homomorphic_loss:
+                #final_loss += F.mse_loss(complex_outputs['instr_embedding'], complex_outputs['img_embeddings'])
+                final_loss += F.mse_loss(complex_outputs['instr_embedding'], complex_outputs['sub_instr_embeddings'])
+                #import pdb; pdb.set_trace()
+                #final_loss += F.mse_loss(complex_outputs['instr_embedding'], complex_outputs['final_memory_per_demo'])
+                #final_loss += F.mse_loss(complex_outputs['final_memory_per_demo'], complex_outputs['summed_memory_per_demo'])
+                #final_loss += F.mse_loss(complex_outputs['sub_instr_embeddings'], complex_outputs['summed_memory_per_demo'])
+                #import pdb; pdb.set_trace()
+        if is_training:
+            self.optimizer.zero_grad()
+            final_loss.backward()
+            self.optimizer.step()
+
+        log = {}
+        log["entropy"] = float(outputs['final_entropy'])
+        log["policy_loss"] = float(outputs['final_policy_loss'])
+        log["accuracy"] = float(outputs['accuracy'])
+
+        if self.args.complex_batch:
+            log["complex_entropy"] = float(complex_outputs['final_entropy'])
+            log["complex_policy_loss"] = float(complex_outputs['final_policy_loss'])
+            log["complex_accuracy"] = float(complex_outputs['accuracy'])
+        return log
+    
+    def _run_batch(self, batch, is_training=False, complex_batch=False):
         batch.sort(key=len, reverse=True)
         # Constructing flat batch and indices pointing to start of each demonstration
         flat_batch = []
         inds = [0]
-
+        demo_starts = []
+        demo_ends = []
         for demo in batch:
+            demo_starts.append(len(flat_batch))
             flat_batch += demo
+            demo_ends.append(len(flat_batch))
             inds.append(inds[-1] + len(demo))
-
+        demo_lens = [end-start for end, start in zip(demo_ends, demo_starts)]
+        inds_copy = [i for i in inds]
         flat_batch = np.array(flat_batch)
         inds = inds[:-1]
         num_frames = len(flat_batch)
@@ -285,7 +358,7 @@ class ImitationLearning(object):
         # Observations, true action, values and done for each of the stored demostration
         obss, action_true, done = flat_batch[:, 0], flat_batch[:, 1], flat_batch[:, 2]
         action_true = torch.tensor([action for action in action_true], device=self.device, dtype=torch.long)
-
+    
         # Memory to be stored
         memories = torch.zeros([len(flat_batch), self.acmodel.memory_size], device=self.device)
         obs_memories = torch.zeros([len(flat_batch), self.acmodel.memory_size], device=self.device)
@@ -294,10 +367,10 @@ class ImitationLearning(object):
         obs_memory = torch.zeros([len(batch), self.acmodel.memory_size], device=self.device)
         preprocessed_first_obs = self.obss_preprocessor(obss[inds], device=self.device, complex=complex_batch)
         instr_embedding = self.acmodel._get_instr_embedding(preprocessed_first_obs.instr)
+        sub_instr_embeddings = None
         if complex_batch and self.args.homomorphic_loss:
-            sub_instr_embedding = self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[0]) + self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[1])
+            sub_instr_embeddings = (self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[0]) + self.acmodel._get_instr_embedding(preprocessed_first_obs.subinstr[1]))
         img_embeddings = torch.zeros([len(batch), self.acmodel.semi_memory_size], device=self.device)
-
         # Loop terminates when every observation in the flat_batch has been handled
         while True:
             # taking observations and done located at inds
@@ -335,27 +408,34 @@ class ImitationLearning(object):
             inds = [index + 1 for index in inds]
 
         # Here, actual backprop upto args.recurrence happens
+        #import pdb; pdb.set_trace()
         final_loss = 0
         final_entropy, final_policy_loss, final_value_loss = 0, 0, 0
 
-        indexes = self.starting_indexes(num_frames)
+        #indexes = self.starting_indexes(num_frames)
+        indexes, memory_indexes = self.get_next_indexes(step=0, demo_starts=demo_starts, demo_lens=demo_lens)
         memory = memories[indexes]
         obs_memory = obs_memories[indexes]
         accuracy = 0
         total_frames = len(indexes) * self.args.recurrence
 
-        for _ in range(self.args.recurrence):
+        for t in range(self.args.recurrence):
             obs = obss[indexes]
             preprocessed_obs = self.obss_preprocessor(obs, device=self.device)
             action_step = action_true[indexes]
             mask_step = mask[indexes]
+#             print("memory shape", memory.shape, "mem index", len(memory_indexes))
+#             print("obs_memory shape", obs_memory.shape)
+#             print("mask-step", mask_step.shape)
+#             if len(memory_indexes) ==  62:
+#                 import pdb; pdb.set_trace()
             model_results = self.acmodel(
-                preprocessed_obs, memory * mask_step, obs_memory = obs_memory * mask_step,
+                preprocessed_obs, memory[memory_indexes] * mask_step, obs_memory = obs_memory[memory_indexes] * mask_step,
                 instr_embedding=instr_embedding[episode_ids[indexes]])
             dist = model_results['dist']
-            memory = model_results['memory']
+            memory[memory_indexes] = model_results['memory']
             if self.args.cpv:
-                obs_memory = model_results['extra_predictions']['obs_memory']
+                obs_memory[memory_indexes]  = model_results['extra_predictions']['obs_memory']
 
             entropy = dist.entropy().mean()
             policy_loss = -dist.log_prob(action_step).mean()
@@ -366,25 +446,44 @@ class ImitationLearning(object):
             final_loss += loss
             final_entropy += entropy
             final_policy_loss += policy_loss
-            indexes += 1
+            indexes, memory_indexes = self.get_next_indexes(step=t+1, demo_starts=demo_starts, demo_lens=demo_lens)
 
-
+        #import pdb; pdb.set_trace()
         final_loss /= self.args.recurrence
-        if self.args.homomorphic_loss:
-            final_loss += F.mse_loss(instr_embedding, img_embeddings)
-        if complex_batch and self.args.homomorphic_loss:
-            final_loss += F.mse_loss(instr_embedding, sub_instr_embedding)
-        if is_training:
-            self.optimizer.zero_grad()
-            final_loss.backward()
-            self.optimizer.step()
-
-        log = {}
-        log["entropy"] = float(final_entropy / self.args.recurrence)
-        log["policy_loss"] = float(final_policy_loss / self.args.recurrence)
-        log["accuracy"] = float(accuracy)
-
-        return log
+        final_entropy /= self.args.recurrence
+        final_policy_loss /= self.args.recurrence
+        summed_memory_per_demo = []
+        final_memory_per_demo = []
+        fl = self._full_demo_starts.tolist()
+        demo_idx = 0
+        for s,l in zip(fl, fl[1:] + [-1]):
+            if l == -1:
+                mem_chunks = memory[s:]
+            else:
+                mem_chunks = memory[s:l]            
+            final_memory_per_demo.append(mem_chunks[-1].unsqueeze(0))
+            mem_diffs = [mem_chunks[0]]
+            total_mem = mem_chunks[0]
+            for t in range(1, l-s):
+                mem_diffs.append(mem_chunks[t] - total_mem)
+                total_mem += mem_diffs[-1]
+            summed_memory_per_demo.append(sum(mem_diffs).unsqueeze(0))
+        summed_memory_per_demo = torch.cat(summed_memory_per_demo, axis=0)
+        final_memory_per_demo = torch.cat(final_memory_per_demo, axis=0)
+        import pdb; pdb.set_trace()
+        
+        return {'final_loss': final_loss,
+                'memory': memory,
+                'final_memory_per_demo': final_memory_per_demo,
+                'summed_memory_per_demo': summed_memory_per_demo,
+                'obs_memory': obs_memory,
+                'instr_embedding': instr_embedding,
+                'sub_instr_embeddings': sub_instr_embeddings,
+                'img_embeddings' : img_embeddings,
+                'final_entropy': final_entropy,
+                'final_policy_loss': final_policy_loss,
+                'accuracy': accuracy,
+               }
 
     def validate(self, episodes, verbose=True):
         if verbose:
@@ -415,6 +514,7 @@ class ImitationLearning(object):
 
     def train(self, train_demos, writer, csv_writer, status_path, header, reset_status=False):
         # Load the status
+        print("TRAINING")
         def initial_status():
             return {'i': 0,
                     'num_frames': 0,
@@ -444,19 +544,23 @@ class ImitationLearning(object):
         if not epoch_length:
             epoch_length = len(train_demos)
         index_sampler = EpochIndexSampler(len(train_demos), epoch_length)
-
+        print("HELLO", status['i'] , getattr(self.args, 'epochs', int(1e9)))
         while status['i'] < getattr(self.args, 'epochs', int(1e9)):
+            print("HELLO", status['i'] , "<", getattr(self.args, 'epochs', int(1e9)), status['i'] < getattr(self.args, 'epochs', int(1e9)))
             if 'patience' not in status:  # if for some reason you're finetuining with IL an RL pretrained agent
                 status['patience'] = 0
             # Do not learn if using a pre-trained model that already lost patience
             if status['patience'] > self.args.patience:
+                print("status['patience'] > self.args.patience", status['patience'] > self.args.patience)
                 break
             if status['num_frames'] > self.args.frames:
+                print("status['num_frames'] > self.args.frames", status['num_frames'] > self.args.frames)
                 break
 
             update_start_time = time.time()
 
             indices = index_sampler.get_epoch_indices(status['i'])
+            print("gonna run a batch")
             log = self.run_epoch_recurrence(train_demos, is_training=True, indices=indices)
 
             # Learning rate scheduler
